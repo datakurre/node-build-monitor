@@ -354,10 +354,10 @@ module.exports = function () {
             var job = project.jobs[key];
 
             // Trigger update for jobs without known end status
-            if (job.pipeline.status !== 'failed' &&
-                job.pipeline.status !== 'success' &&
-                job.pipeline.status !== 'canceled' &&
-                job.pipeline.status !== 'skipped') {
+            if (job.status !== 'failed' &&
+                job.status !== 'success' &&
+                job.status !== 'canceled' &&
+                job.status !== 'skipped') {
               project.has_running_jobs = true;
             }
 
