@@ -20,7 +20,7 @@
     "httpntlm": "^1.7.5",
     "moment": "2.18.1",
     "morgan": "1.8.2",
-    "pug": "2.0.0-beta11",
+    "pug": "^2.0.0-rc.4",
     "request": "2.81.0",
     "socket.io": "2.0.3",
     "striptags": "3.0.1"
@@ -51,8 +51,16 @@
     "node": ">= 6.10.0"
   },
   "pkg": {
-    "scripts": ["app/services/**/*.js", "node_modules/pug/register.js", "node_modules/pug/lib/**/*.js"],
-    "assets": ["app/public/**/*", "app/views/**/*", "app/config.json"]
+    "scripts": [
+      "app/services/**/*.js",
+      "node_modules/pug/register.js",
+      "node_modules/pug/lib/**/*.js"
+    ],
+    "assets": [
+      "app/public/**/*",
+      "app/views/**/*",
+      "app/config.json"
+    ]
   },
   "license": "MIT"
 }

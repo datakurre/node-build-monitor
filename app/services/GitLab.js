@@ -2,18 +2,17 @@
 var request = require('request');
 var async = require('async');
 
-var now = function() { 'use strict';  return (new Date()).getTime(); };
-var second = 1000;
-var minute = second * 60;
-
 module.exports = function () {
   'use strict';
 
   var self = this;
 
   self.cache = {
-    expires: now(),
-    projects: {}
+    check: false,
+    jobs: [],
+    projects: {},
+    last_activity_at: null,
+    last_check_at: null
   };
 
   function log () {
@@ -28,29 +27,7 @@ module.exports = function () {
     }
   }
 
-  function getDefaultExpiration() {
-    return now() + self.config.intervals.disabled;
-  }
-
-  function getProjectExpiration(project) {
-    if (project.jobs_enabled !== true) {
-      return getDefaultExpiration();
-    } else if (!Object.keys(project.jobs).length) {
-      return now() + self.config.intervals.empty;
-    } else {
-      return now() + self.config.intervals.default;
-    }
-  }
-
-  function getBuildExpiration(job) {
-    if (job.status !== 'running') {
-      return getDefaultExpiration();
-    } else {
-      return now();
-    }
-  }
-
-  function getRequestHeaders() {
+  function getRequestHeaders () {
     return {
       'PRIVATE-TOKEN': self.config.token
     };
@@ -58,58 +35,53 @@ module.exports = function () {
 
   function getProjectsApiUrl (page, per_page) {
     var base = self.config.url + '/',
-      query = '?page=' + page + '&per_page=' + per_page + self.config.additional_query;
+        query = '?order_by=last_activity_at&statistics=yes&page=' + page + '&per_page=' + per_page + self.config.additional_query;
     return base + 'api/v4/projects' + query;
   }
 
-  function getProjectBuildsApiUrl (project, page, per_page) {
+  function getProjectJobsApiUrl (project, page, per_page) {
     var base = self.config.url + '/',
-      query = '?page=' + page + '&per_page=' + per_page;
+        query = '?page=' + page + '&per_page=' + per_page;
     return base + 'api/v4/projects/' + project.id + '/jobs' + query;
   }
 
-  function getBuildApiUrl (project, job) {
-    var base = self.config.url + '/';
-    return base + 'api/v4/projects/' + project.id + '/jobs/' + job.id;
-  }
-
-  function getBuildId (project, job) {
-    return project.id + '-' + job.ref + '-' + job.stage;
+  function getJobId (project, job) {
+    return project.id + '-' + job.ref + '-' + job.stage + '-' + job.name;
   }
 
   //noinspection JSUnusedLocalSymbols
-  function getBuildNumber (project, build) {
+  function getJobNumber (project, job) {
     return project.name_with_namespace;
   }
 
   //noinspection JSUnusedLocalSymbols
-  function getBuildProject (project, job) {
-    return job.ref;
+  function getJobProject (project, job) {
+    return job.ref + ' / ' + job.name;
   }
 
   //noinspection JSUnusedLocalSymbols
-  function getBuildIsRunning (project, job) {
+  function getJobIsRunning (project, job) {
     return (job.status === 'running' ||
-      job.status === 'pending');
+            job.status === 'pending');
   }
 
   //noinspection JSUnusedLocalSymbols
-  function getBuildStartedAt (project, job) {
+  function getJobStartedAt (project, job) {
     return new Date(job.started_at);
   }
 
   //noinspection JSUnusedLocalSymbols
-  function getBuildFinishedAt (project, job) {
+  function getJobFinishedAt (project, job) {
     return new Date(job.finished_at);
   }
 
   //noinspection JSUnusedLocalSymbols
-  function getBuildRequestedFor (project, job) {
+  function getJobRequestedFor (project, job) {
     return job.commit && job.commit.author_name;
   }
 
   //noinspection JSUnusedLocalSymbols
-  function getBuildStatus (project, job) {
+  function getJobStatus (project, job) {
     switch (job.status) {
       case 'pending':
         return '#ffa500';
@@ -125,196 +97,134 @@ module.exports = function () {
   }
 
   //noinspection JSUnusedLocalSymbols
-  function getBuildStatusText (project, job) {
+  function getJobStatusText (project, job) {
     return job.stage + ' ' + job.status;
   }
 
   //noinspection JSUnusedLocalSymbols
-  function getBuildReason (project, job) {
+  function getJobReason (project, job) {
     return job.commit && job.commit.title;
 
   }
 
-  function getBuildUrl (project, job) {
+  function getJobUrl (project, job) {
     var base = self.config.url + '/';
-    return base + project.path_with_namespace + '/-/jobs/' + job.id;
+    return base + project.path_with_namespace + '/pipelines/' + job.pipeline.id;
   }
 
-  function getBuildMonitorBuild (project, job) {
+  function getJobMonitorJob (project, job) {
     return {
-      id: getBuildId(project, job),
-      number: getBuildNumber(project, job),
-      project: getBuildProject(project, job),
-      isRunning: getBuildIsRunning(project, job),
-      startedAt: getBuildStartedAt(project, job),
-      finishedAt: getBuildFinishedAt(project, job),
-      requestedFor: getBuildRequestedFor(project, job),
-      status: getBuildStatus(project, job),
-      statusText: getBuildStatusText(project, job),
-      reason: getBuildReason(project, job),
+      id: getJobId(project, job),
+      number: getJobNumber(project, job),
+      project: getJobProject(project, job),
+      isRunning: getJobIsRunning(project, job),
+      startedAt: getJobStartedAt(project, job),
+      finishedAt: getJobFinishedAt(project, job),
+      requestedFor: getJobRequestedFor(project, job),
+      status: getJobStatus(project, job),
+      statusText: getJobStatusText(project, job),
+      reason: getJobReason(project, job),
       hasErrors: false,
       hasWarnings: false,
-      url: getBuildUrl(project, job)
+      url: getJobUrl(project, job)
     };
   }
 
-  function requestFirstPage(getPagedApiUrl, callback) {
-    log('Fetching', getPagedApiUrl(1, 100));
-    request({
-      headers: getRequestHeaders(),
-      url: getPagedApiUrl(1, 100),
-      json: true
-    }, function (err, response, body) {
-      if (!err && response.statusCode === 200) {
-        process.nextTick(function() {
-          callback(body);
-        });
-      } else {
-        log('Error', body);
-        process.nextTick(function() {
-          callback([]);
-        });
-      }
-    });
-  }
-
-  function requestAllPages(getPagedApiUrl, callback) {
-    log('Fetching', getPagedApiUrl(1, 100));
-    request({
-      headers: getRequestHeaders(),
-      url: getPagedApiUrl(1, 100),
-      json: true
-    }, function(err, response, body) {
-      if (!err && response.statusCode === 200) {
-        var urls = [], pages = Math.ceil(
-          parseInt(response.headers['x-total-pages'], 10));
-        for (var i = 2; i <= pages; i = i + 1) {
-          urls.push(getPagedApiUrl(i, 100));
-        }
-
-        process.nextTick(function() {
-          callback(body);
-        });
-
-        async.mapSeries(urls, function(url, pass) {
-          log('Fetching', url);
-          request({
-            headers: getRequestHeaders(),
-            url: url,
-            json: true
-          }, function (err, response, body) {
-            if (!err && response.statusCode === 200) {
-              process.nextTick(function() {
-                callback(body);
+  function getAllPages(getPagedApiUrl, page, pageSize, callback) {
+    if (typeof page === 'function') {
+      callback = page;
+      page = 1;
+      pageSize = 10;
+    }
+    if (typeof pageSize === 'function') {
+      callback = pageSize;
+      pageSize = 10;
+    }
+    log('Get', getPagedApiUrl(page, pageSize));
+    request(
+      {
+        headers: getRequestHeaders(),
+        url: getPagedApiUrl(page, pageSize),
+        json: true
+      },
+      function (err, response, body) {
+        if (!err && response.statusCode === 200) {
+          var pages = parseInt(response.headers['x-total-pages'], 10);
+          if (page < Math.min(pages, 5)) {
+            callback(body, function () {
+              process.nextTick(function () {
+                getAllPages(getPagedApiUrl, page + 1, pageSize, callback);
               });
-              process.nextTick(function() {
-                pass(null, body);
-              });
-            } else {
-              log('Error', body);
-              process.nextTick(function() {
-                callback([]);
-              });
-              process.nextTick(function() {
-                pass(null, []);
-              });
-            }
-          });
-        });
-      } else {
-        log('Error', body);
-        process.nextTick(function() {
-          callback([]);
-        });
-      }
-    });
-  }
-
-  function updateBuild(project, build, callback) {
-    log('Fetching', getBuildApiUrl(project, build));
-    request({
-      headers: getRequestHeaders(),
-      url: getBuildApiUrl(project, build),
-      json: true
-    }, function(err, response, body) {
-      if (!err && response.statusCode === 200) {
-        body.monitor = getBuildMonitorBuild(project, body);
-        body.expires = getBuildExpiration(body);
-        project.jobs[body.monitor.id] = body;
-        if (typeof callback === 'function') {
-          process.nextTick(function() {
+            });
+          } else {
             callback(body);
-          });
-        }
-      } else {
-        log('Error', body);
-        if (typeof callback === 'function') {
-          process.nextTick(function() {
-            callback(build);
-          });
+          }
+        } else {
+          log('Error', body);
         }
       }
-    });
+    );
   }
 
-  function reduceBuilds(builds, callback) {
+  function reduceJobs(jobs, callback) {
     var seen = {};
     var latest = null;
 
-    var results = builds.filter(function(build) {
-      var key = build.monitor.id;
+    var results = jobs.filter(function (job) {
+      var key = job.monitor.id;
       if (typeof seen[key] === 'undefined') {
-        seen[key] = build;
+        seen[key] = job;
         return true;
       }
-      else if (seen[key].monitor.startedAt < build.monitor.startedAt) {
-        seen[key] = build;
+      else if (seen[key].monitor.startedAt < job.monitor.startedAt) {
+        seen[key] = job;
         return true;
       } else {
         return false;
       }
-    }).filter(function(build) {
-      if (!latest || build.monitor.startedAt > latest) {
-        latest = build.monitor.startedAt;
+    }).filter(function (job) {
+      if (!latest || job.monitor.startedAt > latest) {
+        latest = job.monitor.startedAt;
         return true;
       } else {
-        return build.monitor.isRunning || build.status === 'failing';
+        return job.monitor.isRunning || job.status === 'failing';
       }
     });
 
     if (typeof callback === 'function') {
-      process.nextTick(function() {
-        callback(results);
-      });
+      callback(results);
     }
   }
 
-  function fetchProjectBuilds(project, callback) {
-    requestFirstPage(function (page, per_page) {
-      return getProjectBuildsApiUrl(project, page, per_page);
-    }, function (results) {
-      results.forEach(function(build, index)  {
-        results.find(function(item) { return item.id === build.id; })
-               .monitor = getBuildMonitorBuild(project, build);
-        results.find(function(item) { return item.id === build.id; })
-               .expires = getBuildExpiration(build);
-      });
-      process.nextTick(function() {
-        reduceBuilds(results, function(results) {
-          if (results.length) {
-            log(project.name_with_namespace + ' | ' +
-              results.length + ' current builds.');
+  function getProjectJobs(project, callback) {
+    getAllPages(
+      function (page, per_page) {
+        return getProjectJobsApiUrl(project, page, per_page);
+      },
+      1,
+      20,
+      function (results, next) {
+        async.mapSeries(
+          results,
+          function (job, pass) {
+            job.monitor = getJobMonitorJob(project, job);
+            pass(null, job);
+          },
+          function (err, jobs) {
+            reduceJobs(jobs, function (jobs) {
+              if (jobs.length) {
+                log('Updated ' + project.name_with_namespace + ' with ' +
+                    jobs.length + ' jobs');
+              }
+              callback(jobs);
+            });
           }
-          process.nextTick(function() {
-            callback(results);
-          });
-        });
-      });
-    });
+        );
+      }
+    );
   }
 
   function updateProject(project, callback) {
-    log('Updating project:', project.name_with_namespace);
     if (self.config.slugs.indexOf('*/*') > -1 ||
         self.config.slugs.indexOf(project.namespace.name + "/*")  > -1 ||
         self.config.slugs.indexOf(project.path_with_namespace) > -1) {
@@ -322,127 +232,193 @@ module.exports = function () {
         project.jobs = {};
       }
       if (project.jobs_enabled === true) {
-        fetchProjectBuilds(project, function(results) {
-          var i, build, builds = {};
-          for (i = 0; i < results.length; i = i + 1) {
-            build = results[i];
-            builds[build.monitor.id] = build;
-          }
-          if (Object.keys(builds).length) {
-            project.jobs = builds;
-          }
-          project.expires = getProjectExpiration(project);
-          self.cache.projects[project.id] = project;
-          if (typeof callback === 'function') {
-            process.nextTick(function() {
+        getProjectJobs(
+          project,
+          function (results) {
+            var i, job, jobs = {};
+            for (i = 0; i < results.length; i = i + 1) {
+              job = results[i];
+              jobs[job.monitor.id] = job;
+            }
+            project.jobs = jobs;
+            self.cache.projects[project.id] = project;
+            if (typeof callback === 'function') {
               callback(project);
-            });
+            }
           }
-        });
+        );
       } else {
         project.jobs = {};
-        project.expires = getProjectExpiration(project);
         self.cache.projects[project.id] = project;
         if (typeof callback === 'function') {
-          process.nextTick(function() {
-            callback(project);
-          });
+          callback(project);
         }
       }
     } else {
       if (typeof callback === 'function') {
-        process.nextTick(function() {
-          callback(project);
-        });
+        callback(project);
       }
     }
   }
 
-  function fetchNewProjects(callback) {
-    self.cache.expires = getDefaultExpiration();
+  function updateProjects(callback) {
+    var last_activity_at = self.cache.last_activity_at,
+        last_activity_at_after = null,
+        total_projects = 0;
 
-    log('Fetching new projects...');
-    requestAllPages(getProjectsApiUrl, function (projects) {
-      projects.filter(function(project) { return project.jobs_enabled === true; })
-              .forEach(function(project) { updateProject(project); });
-      log('Found', projects.length + ' new projects.');
-      if (typeof callback === 'function') {
-        process.nextTick(function() {
-          callback(projects);
-        });
+    // Allow only single updateProjects at time
+    if (last_activity_at !== -1) {
+      self.cache.last_activity_at = -1;
+    } else if (last_activity_at === null) {
+      last_activity_at = -1;
+    } else {
+      return;
+    }
+
+    // Last activity at is throttled an hour
+    last_activity_at = last_activity_at - 3600 * 1000;
+
+    getAllPages(
+      getProjectsApiUrl,
+      function (projects, next) {
+        async.filter(
+          projects,
+          function (project, callback) {
+            if (project.jobs_enabled === true) {
+              callback(null, true);
+            } else {
+              callback(null, false);
+            }
+          },
+          function (err, results) {
+            async.mapSeries(
+              results,
+              function (project, pass) {
+                var activity_at = new Date(project.last_activity_at);
+                if (last_activity_at_after === null) {
+                  last_activity_at_after = activity_at;
+                }
+                if (activity_at > last_activity_at &&
+                    !(self.cache.projects[project.id] &&
+                      self.cache.projects[project.id].has_running_jobs)) {
+                  total_projects = total_projects + 1;
+                  process.nextTick(function () {
+                    updateProject(project, function (project) {
+                      pass(null, project);
+                    });
+                  });
+                } else {
+                  next = null;  // fetch no more
+                  pass(null, project);
+                }
+              },
+              function (err, projects) {
+                if (typeof next === 'function' &&
+                    self.cache.last_activity_at === -1) {
+                  next();
+                } else {
+                  self.cache.last_activity_at = last_activity_at_after;
+                  if (typeof callback === 'function') {
+                    log('Found ' + total_projects + ' new or updated projects');
+                    callback(projects);
+                  }
+                }
+              }
+            );
+          }
+        );
       }
-    });
+    );
   }
 
   self.check = function (callback) {
-    // Trigger fetch for new projects
-    if (now() > self.cache.expires) {
-      process.nextTick(fetchNewProjects);
+    if (self.cache.check) {
+      callback(null, self.cache.jobs);
+      return;
+    } else {
+      self.cache.check = true;
     }
-
-    // Iterate through already cached projects
-    async.mapSeries(Object.keys(self.cache.projects),
-      function(key, pass) {
+    // Iterate through all known projects
+    async.mapSeries(
+      Object.keys(self.cache.projects),
+      function (key, pass) {
         var project = self.cache.projects[key];
 
-        // Trigger fetch for new builds for projects with expired cache
-        if (now() > project.expires) {
-          process.nextTick(function () {
-            updateProject(project);
-          });
-        }
+        // Reset flag
+        project.has_running_jobs = false;
 
-        // Iterate through already cached builds for the project
-        async.mapSeries(Object.keys(project.jobs),
-          function(key, pass) {
-            var build = project.jobs[key];
+        // Iterate through all known jobs
+        async.mapSeries(
+          Object.keys(project.jobs),
+          function (key, pass) {
+            var job = project.jobs[key];
 
-            // Trigger fetch for build with expired cache
-            if (now() > build.expires) {
+            // Trigger update for jobs without known end status
+            if (job.pipeline.status !== 'failed' &&
+                job.pipeline.status !== 'success' &&
+                job.pipeline.status !== 'canceled' &&
+                job.pipeline.status !== 'skipped') {
+              project.has_running_jobs = true;
+            }
+
+            // Collect the monitor version of job
+            pass(null, job.monitor);
+          },
+          function (err, results) {
+
+            // Schedule updates
+            if (project.has_running_jobs) {
               process.nextTick(function() {
-                updateBuild(project, build);
+                updateProject(project);
               });
             }
 
-            // Pass along the monitor version of the build info
-            process.nextTick(function() {
-              pass(null, build.monitor);
-            });
-          }, function(err, results) {
+            // Pass list of job lists forward
+            pass(null, results);
+          }
+        );
+      },
 
-            // Pass along all project.jobs
-            process.nextTick(function() {
-              pass(null, results);
-            });
-          });
-      }, function(err, builds) {
-
-        // Reduce builds from all projects into a flat array
-        async.reduce(builds, [], function(memo, item, pass) {
-          process.nextTick(function() {
+      // Reduce jobs from all projects into a flat array
+      function (err, jobs) {
+        async.reduce(
+          jobs, [],
+          function (memo, item, pass) {
             pass(null, memo.concat(item));
-          });
-        }, function(err, builds) {
-          process.nextTick(function() {
-            callback(err, builds);
-          });
-        });
-      });
+          },
+          function (err, jobs) {
+            self.cache.jobs = jobs;
+            self.cache.check = false;
+            callback(err, jobs);
+            if (self.cache.last_check_at === null ||
+                self.cache.last_check_at < new Date() - self.config.interval) {
+              self.cache.last_check_at = new Date();
+              process.nextTick(function () {
+                updateProjects();
+              });
+            }
+          }
+        );
+      }
+    );
   };
 
+  /*
+  "services": [{
+    "name": "GitLab",
+    "configuration": {
+      "url": "https://gitlab.yourdomain",
+      "interval": 10000,
+      "slugs": [],
+      "token": "secret",
+      "debug": true
+    }
+  }]
+  */
   self.configure = function (config) {
     self.config = config;
-    if (typeof self.config.intervals === 'undefined') {
-      self.config.intervals = {};
-    }
-    if (typeof self.config.intervals.disabled === 'undefined') {
-      self.config.intervals.disabled = 12 * 60 * minute;
-    }
-    if (typeof self.config.intervals.empty === 'undefined') {
-      self.config.intervals.empty = 10 * minute;
-    }
-    if (typeof self.config.intervals.default === 'undefined') {
-      self.config.intervals.default = minute;
+    if (typeof self.config.interval === 'undefined') {
+      self.config.interval = 15000;
     }
     if (typeof self.config.slugs === 'undefined') {
       self.config.slugs = ['*/*'];
@@ -466,4 +442,5 @@ module.exports = function () {
       }
     }
   };
+
 };
