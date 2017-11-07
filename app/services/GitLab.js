@@ -179,7 +179,8 @@ module.exports = function () {
       else if (seen[key].monitor.startedAt < job.monitor.startedAt) {
         seen[key] = job;
         return true;
-      } else {
+      }
+      else {
         return false;
       }
     }).filter(function (job) {
@@ -187,7 +188,7 @@ module.exports = function () {
         latest = job.monitor.startedAt;
         return true;
       } else {
-        return job.monitor.isRunning || job.status === 'failing';
+        return job.monitor.isRunning || job.status === 'failed';
       }
     });
 
