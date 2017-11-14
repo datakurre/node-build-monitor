@@ -161,6 +161,9 @@ module.exports = function () {
           }
         } else {
           log('Error', body);
+          setTimeout(function () {
+            getAllPages(getPagedApiUrl, page, pageSize, callback);
+          }, 1000);
         }
       }
     );
